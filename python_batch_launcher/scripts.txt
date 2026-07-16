@@ -1,0 +1,11 @@
+# launch_all.py が起動する Python スクリプトの一覧
+# 1行に1つずつフルパスを書いてください。
+# 行頭に # を付けると、その行は無視されます(コメント)。
+
+C:\Users\sakuk\OneDrive\python\90pa\main10.py
+C:\Users\sakuk\OneDrive\python\90pa\main8.py
+C:\Users\sakuk\OneDrive\python\90pa\main9.py
+C:\Users\sakuk\OneDrive\請求書自動\python\FAX.py
+C:\Users\sakuk\OneDrive\python\kabu\S&Pver2.py
+C:\Users\sakuk\OneDrive\python\kabu\S&Pver4.py
+C:\Users\sakuk\OneDrive\python\kabu\kabu2.py
