@@ -138,7 +138,10 @@ def run_once(state, verbose=True):
 
             if verbose:
                 reason = it.get("unavailable_reason")
+                seller = it.get("seller")
                 print(f"  - {it['name'][:60]!r} 価格:{price} 在庫:{in_stock} 定価相当:{fair}")
+                if seller:
+                    print(f"    (出品者: {seller})")
                 if reason:
                     print(f"    (在庫なし理由: {reason})")
                 print(f"    {it['url']}")
