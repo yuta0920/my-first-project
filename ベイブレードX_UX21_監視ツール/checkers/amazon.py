@@ -3,6 +3,7 @@
 Amazon側がボット判定してCAPTCHA等を出した場合は、無理に突破しようとせず
 単に「今回は0件」として静かにスキップする(次回また試す)。
 """
+import re
 import urllib.parse
 from bs4 import BeautifulSoup
 from . import generic_scrape as gs
@@ -16,22 +17,57 @@ def check(keyword, direct_url=None, timeout=25, trusted_sellers=None):
 
 
 def _current_price_tag(soup):
-    """実際の販売価格(priceToPay)を返す。取り消し線の参考価格(a-text-price)は対象外にする。
-    a-text-price を除外しないと、割引表示時に「参考価格」を実売価格として誤取得してしまう。
+    """単一の「買い物カゴ」(バイボックス)がある通常ページでの実売価格(priceToPay)を返す。
+    取り消し線の参考価格(a-text-price)は対象外。ここで見つからない場合は None を返す
+    (ページ全体を対象にした無条件フォールバックはしない — 複数出品者が並ぶページで
+    無関係な価格を拾ってしまう不具合の原因になっていたため、あえて外している)。
     """
     selectors = (
         "#corePrice_feature_div span.priceToPay span.a-offscreen",
         "#corePriceDisplay_desktop_feature_div span.priceToPay span.a-offscreen",
         "#corePrice_feature_div span.a-price:not(.a-text-price) span.a-offscreen",
         "#corePriceDisplay_desktop_feature_div span.a-price:not(.a-text-price) span.a-offscreen",
-        "span.priceToPay span.a-offscreen",
-        "span.a-price:not(.a-text-price) span.a-offscreen",
     )
     for sel in selectors:
         tag = soup.select_one(sel)
         if tag:
             return tag
     return None
+
+
+_TAX_EXCLUDED_RE = re.compile(r"^￥([\d,]+)\s*税抜$")
+_TAX_INCLUDED_RE = re.compile(r"^￥([\d,]+)\s*税込$")
+_OFFER_SELLER_RE = re.compile(r"^(?:出荷元|販売元)(.+)$")
+
+
+def _parse_offer_listing(body_text):
+    """単一バイボックスが無く、複数の出品者(出荷元/販売元)が並んでいるページ用の解析。
+    CSSクラスではなく画面表示テキスト(税抜/税込/出荷元/販売元の行)を頼りにしているので、
+    レイアウトのクラス名変更に強い代わりに、行区切りの想定が崩れると解析0件になる。
+    """
+    lines = [ln.strip() for ln in body_text.splitlines() if ln.strip()]
+    offers = []
+    i = 0
+    while i < len(lines) - 1:
+        m_pretax = _TAX_EXCLUDED_RE.match(lines[i])
+        m_tax = _TAX_INCLUDED_RE.match(lines[i + 1]) if m_pretax else None
+        if not (m_pretax and m_tax):
+            i += 1
+            continue
+
+        price = int(m_tax.group(1).replace(",", ""))
+        condition = lines[i - 1] if i > 0 else None
+        seller = None
+        for j in range(i + 2, min(i + 15, len(lines))):
+            if _TAX_EXCLUDED_RE.match(lines[j]):
+                break  # 出品者が見つかる前に次の出品の価格行に到達した
+            sm = _OFFER_SELLER_RE.match(lines[j])
+            if sm:
+                seller = sm.group(1).strip()
+                break
+        offers.append({"condition": condition, "price": price, "seller": seller})
+        i += 2
+    return offers
 
 
 _SELLER_PREFIXES = ("販売:", "販売元:", "販売業者:", "出荷元:", "Sold by", "Ships from and sold by")
@@ -68,40 +104,82 @@ def _check_direct_url(url, timeout, trusted_sellers=None):
     soup = BeautifulSoup(html, "html.parser")
     title_tag = soup.select_one("#productTitle")
     name = title_tag.get_text(strip=True) if title_tag else url
+    unavailable = any(p in body_text for p in gs.UNAVAILABLE_PATTERNS)
+    buy_type = gs.detect_buy_type(body_text)
 
     price_tag = _current_price_tag(soup)
-    price = None
-    if price_tag:
+    if price_tag is not None:
         digits = "".join(ch for ch in price_tag.get_text() if ch.isdigit())
         price = int(digits) if digits else None
+        seller = _seller_name(soup)
+        seller_ok = _seller_allowed(seller, trusted_sellers)
+        in_stock = price is not None and not unavailable and seller_ok
 
-    seller = _seller_name(soup)
-    seller_ok = _seller_allowed(seller, trusted_sellers)
+        if in_stock:
+            reason = None
+        elif price is not None and not unavailable and not seller_ok:
+            reason = f"信頼できる出品者ではないため対象外(出品者: {seller or '不明'})"
+        else:
+            reason = "価格が見つからないか、取り扱い終了/売り切れの文言あり"
 
-    unavailable = any(p in body_text for p in gs.UNAVAILABLE_PATTERNS)
-    in_stock = price is not None and not unavailable and seller_ok
+        return {
+            "ok": True,
+            "items": [
+                {
+                    "name": name,
+                    "price": price,
+                    "url": url,
+                    "in_stock": in_stock,
+                    "unavailable_reason": reason,
+                    "buy_type": buy_type,
+                    "seller": seller,
+                }
+            ],
+        }
 
-    if in_stock:
-        unavailable_reason = None
-    elif price is not None and not unavailable and not seller_ok:
-        unavailable_reason = f"信頼できる出品者ではないため対象外(出品者: {seller or '不明'})"
-    else:
-        unavailable_reason = "価格が見つからないか、取り扱い終了/売り切れの文言あり"
+    # 単一のバイボックスが見つからない = 複数の出品者(出荷元/販売元)が並ぶページの可能性が高い。
+    offers = _parse_offer_listing(body_text)
+    if not offers:
+        return {
+            "ok": True,
+            "items": [
+                {
+                    "name": name,
+                    "price": None,
+                    "url": url,
+                    "in_stock": False,
+                    "unavailable_reason": "価格情報を解析できませんでした(ページ構成が想定と異なる可能性)",
+                    "buy_type": buy_type,
+                    "seller": None,
+                }
+            ],
+        }
 
-    return {
-        "ok": True,
-        "items": [
+    items = []
+    for idx, offer in enumerate(offers):
+        seller = offer["seller"]
+        seller_ok = _seller_allowed(seller, trusted_sellers)
+        in_stock = not unavailable and seller_ok
+        if in_stock:
+            reason = None
+        elif not seller_ok:
+            reason = f"信頼できる出品者ではないため対象外(出品者: {seller or '不明'})"
+        else:
+            reason = "取り扱い終了/売り切れの文言あり"
+        items.append(
             {
                 "name": name,
-                "price": price,
-                "url": url,
+                "price": offer["price"],
+                # 出品ごとに状態を別々に追跡できるよう、出品者名をURLのフラグメントとして付与する
+                "url": f"{url}#offer={urllib.parse.quote(seller or f'offer{idx}')}",
                 "in_stock": in_stock,
-                "unavailable_reason": unavailable_reason,
-                "buy_type": gs.detect_buy_type(body_text),
+                "unavailable_reason": reason,
+                "buy_type": buy_type,
                 "seller": seller,
+                "condition": offer["condition"],
             }
-        ],
-    }
+        )
+    return {"ok": True, "items": items}
 
 
 def _check_search(keyword, timeout, trusted_sellers=None):
