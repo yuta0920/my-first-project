@@ -13,7 +13,14 @@ from notifier import notify_windows, log_hit, send_email
 def _sites():
     # タカラトミーモールは抽選販売のため、定価・先着監視の対象からは外している。
     return [
-        ("Amazon.co.jp", lambda: amazon.check(config.SEARCH_KEYWORDS[0], direct_url=config.AMAZON_URL)),
+        (
+            "Amazon.co.jp",
+            lambda: amazon.check(
+                config.SEARCH_KEYWORDS[0],
+                direct_url=config.AMAZON_URL,
+                trusted_sellers=config.AMAZON_TRUSTED_SELLERS,
+            ),
+        ),
         (
             "ヨドバシ.com",
             lambda: yodobashi.check(config.SEARCH_KEYWORDS[0], config.MODEL_CODE, direct_url=config.YODOBASHI_URL),

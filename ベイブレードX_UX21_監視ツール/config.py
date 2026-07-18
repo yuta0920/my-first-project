@@ -32,6 +32,11 @@ CHECK_INTERVAL_SECONDS = int(_v["CHECK_INTERVAL_SECONDS"])
 # 商品ページのURLが分かっている場合はここに入る(空文字ならキーワード検索にフォールバック)
 AMAZON_URL = _v.get("AMAZON_URL", "").strip() or None
 YODOBASHI_URL = _v.get("YODOBASHI_URL", "").strip() or None
+# Amazonの「買い物カゴ」出品者名をカンマ区切りで限定したい場合に設定する
+# (空欄なら従来通り出品者は問わず、価格が定価以下かどうかだけで判定する)
+AMAZON_TRUSTED_SELLERS = [
+    s.strip() for s in _v.get("AMAZON_TRUSTED_SELLERS", "").split(",") if s.strip()
+]
 EDION_URL = _v.get("EDION_URL", "").strip() or None
 KAKAKU_KEYWORD = _v.get("KAKAKU_KEYWORD", "").strip() or None
 
