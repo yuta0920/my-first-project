@@ -97,7 +97,10 @@ def _seller_allowed(seller, trusted_sellers):
 
 
 def _check_direct_url(url, timeout, trusted_sellers=None):
-    body_text, html = browser.load_page(url, timeout=timeout, wait=3)
+    # 複数出品者の一覧(All Offers Display)はJSで後から描画されるため、
+    # 通常ページより長めに待ってから本文を読む(browser.py側の実装は未確認のため、
+    # ここで安全側に倒して待ち時間を延ばしている)。
+    body_text, html = browser.load_page(url, timeout=timeout, wait=6)
     if html is None:
         return {"ok": False, "error": "商品ページを取得できませんでした", "items": []}
 
@@ -139,6 +142,14 @@ def _check_direct_url(url, timeout, trusted_sellers=None):
 
     # 単一のバイボックスが見つからない = 複数の出品者(出荷元/販売元)が並ぶページの可能性が高い。
     offers = _parse_offer_listing(body_text)
+    if not offers:
+        # 出品一覧はJSの遅延描画のため、初回でまだ描画し切れていない可能性がある。
+        # もう一度だけ、さらに長く待ってから読み直してみる。
+        body_text, html = browser.load_page(url, timeout=timeout, wait=10)
+        if html is not None:
+            soup = BeautifulSoup(html, "html.parser")
+            unavailable = any(p in body_text for p in gs.UNAVAILABLE_PATTERNS)
+            offers = _parse_offer_listing(body_text)
     if not offers:
         return {
             "ok": True,
@@ -184,7 +195,7 @@ def _check_direct_url(url, timeout, trusted_sellers=None):
 
 def _check_search(keyword, timeout, trusted_sellers=None):
     url = "https://www.amazon.co.jp/s?k=" + urllib.parse.quote(keyword)
-    _, html = browser.load_page(url, timeout=timeout, wait=3)
+    _, html = browser.load_page(url, timeout=timeout, wait=3)  # 検索結果は静的なのでこちらは従来通り
     if html is None:
         return {"ok": False, "error": "検索結果ページを取得できませんでした", "items": []}
 
